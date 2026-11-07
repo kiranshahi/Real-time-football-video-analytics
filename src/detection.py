@@ -9,7 +9,7 @@ class Detection:
     track_id: int
     class_id: int
     confidence: float
-    bbox: tuple [int, int, int, int]  # (x, y, width, height)
+    bboxes: tuple [int, int, int, int]  # (x1, y1, x2, y2)
     center: tuple[int, int]
 
 
@@ -22,8 +22,9 @@ class FootballDetector:
 
         self.target_classes = [0, 32]  # Person and sports ball class IDs
 
-    def detect(self, frame):
+    def detect(self, frame) -> list[Detection]:
         results = self.model.track(source=frame, persist=True, tracker="bytetrack.yaml", conf=self.confidence, classes=self.target_classes, device=self.device, verbose=False)
+        
         tracked_objects = []
         boxes = results[0].boxes
 
@@ -38,26 +39,30 @@ class FootballDetector:
 
             if class_id == 0: 
                 center = ((x1 + x2) // 2, y2)
+                self.history[track_id].append(center)
             else: 
                 center = ( (x1 + x2) // 2, (y1 + y2) // 2)
             
-            tracked_objects.append(Detection(track_id, class_id, confidence, bbox=(x1, y1, x2, y2), center=center))
+            tracked_objects.append(Detection(track_id, class_id, confidence, (x1, y1, x2, y2), center))
         
         return tracked_objects
 
-    def draw(self, frame, detections):
+    def draw(self, frame, detections: list[Detection], teams: dict[int, int] | None = None):
         output_frame = frame.copy()
-        
+        teams = teams or {}
+
         for detection in detections:
-            x, y, w, h = detection.bbox
+            x1, y1, x2, y2 = detection.bboxes
             is_player = detection.class_id == 0
-            color = ((0, 255, 0) if is_player else (0, 165, 255))
+            team_id = teams.get(detection.track_id) if is_player else None
 
-            cv2.rectangle(output_frame, (x, y), (w, h), color, 2)
+            color = (255, 0, 0) if team_id == 0 else (0, 0, 255) if team_id == 1 else (0, 255, 0) if is_player else (0, 165, 255)
 
-            label = f"ID {detection.track_id}" if is_player else f"Ball {detection.track_id}"
+            cv2.rectangle(output_frame, (x1, y1), (x2, y2), color, 2)
+
+            label = f"Team {team_id} | ID {detection.track_id}" if team_id is not None else (f"ID {detection.track_id}" if is_player else f"Ball {detection.track_id}")
             
-            cv2.putText(output_frame, label, (x, max(20, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            cv2.putText(output_frame, label, (x1, max(20, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
             if is_player:
                 points = list(self.history[detection.track_id])

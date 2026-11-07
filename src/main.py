@@ -5,10 +5,11 @@ from tracemalloc import start
 import cv2
 
 from detection import FootballDetector
+from team_classifier import TeamClassifier
 
 def process_video(source, output_path, model_path):
     detector = FootballDetector(model_path)
-
+    team_classifier = TeamClassifier()
 
     video_source = (int(source) if source.isdigit() else source)
 
@@ -46,7 +47,10 @@ def process_video(source, output_path, model_path):
             start = time.perf_counter()
 
             detections = detector.detect(frame)
-            annotated_frame = detector.draw(frame, detections)
+
+            teams = team_classifier.classify_team(frame, detections)
+            annotated_frame = detector.draw(frame, detections, teams)
+          
 
             processing_time = (time.perf_counter() - start)
             total_processing_time += processing_time
