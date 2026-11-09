@@ -4,7 +4,7 @@ import time
 from tracemalloc import start
 import cv2
 
-from detection import FootballDetector
+from models.yolo_baseline import FootballDetector
 from team_classifier import TeamClassifier
 
 def process_video(source, output_path, model_path):
