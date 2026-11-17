@@ -36,4 +36,8 @@ def train(args):
     return results
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser(description="Fine-tune YOLO on Soccer Factory")
+    parser.add_argument("--data", type=str, required=True)
+    args = parser.parse_args()
+    
+    train(args)
