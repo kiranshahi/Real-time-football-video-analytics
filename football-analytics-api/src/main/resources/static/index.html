@@ -1,0 +1,612 @@
+
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1">
+
+    <title>Football Analytics</title>
+
+    <link rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.9/dist/css/bootstrap.min.css">
+
+    <style>
+        body {
+            background-color: #f8fafc;
+        }
+
+        .video-container {
+            position: relative;
+            width: fit-content;
+            max-width: 100%;
+            margin-inline: auto;
+            background-color: #111827;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        #footballVideo {
+            display: block;
+            width: auto;
+            max-width: 100%;
+            max-height: 400px;
+            height: auto;
+        }
+
+        #overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        #boundingBoxList {
+            max-height: 350px;
+            overflow-y: auto;
+        }
+
+        .detection-item {
+            border-left: 4px solid #198754 !important;
+        }
+
+        .video-container:empty {
+            min-height: 200px;
+        }
+
+        @media (max-width: 576px) {
+            #footballVideo {
+                max-height: 300px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<nav class="navbar bg-white border-bottom">
+    <div class="container">
+        <span class="navbar-brand fw-bold">
+            Football Analytics
+        </span>
+    </div>
+</nav>
+
+<main class="container py-4">
+
+    <div class="row g-4 justify-content-center">
+
+        <!-- Left: Video Player -->
+        <div class="col-12 col-lg-8">
+
+            <div class="card shadow-sm">
+                <div class="card-header d-flex
+                            justify-content-between
+                            align-items-center">
+
+                    <span class="fw-semibold">
+                        Football Video Analysis
+                    </span>
+
+                </div>
+
+                <div class="card-body">
+
+                    <div class="video-container">
+                        <video
+                                id="footballVideo"
+                                controls
+                                playsinline
+                                preload="metadata">
+                        </video>
+
+                        <canvas id="overlay"></canvas>
+                    </div>
+
+                    <div class="d-flex
+                                justify-content-between
+                                align-items-center mt-3">
+
+                        <small id="videoTitle"
+                               class="text-muted">
+                            No video selected
+                        </small>
+
+                        <span id="detectionCount"
+                              class="badge text-bg-primary">
+                            0 Detections
+                        </span>
+                    </div>
+
+                    <div id="inferenceStatus"
+                         class="small text-secondary mt-2"
+                         role="status">
+                        Select a video to begin.
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Video Menu -->
+        <div class="col-12 col-lg-4">
+
+            <div class="card shadow-sm">
+                <div class="card-header fw-semibold">
+                    Available Videos
+                </div>
+
+                <div class="list-group list-group-flush"
+                     id="videoList">
+
+                    <button type="button"
+                            class="list-group-item list-group-item-action active"
+                            data-video="test1.mp4"
+                            data-title="Match 1">
+                        Video 1
+                    </button>
+
+                    <button type="button"
+                            class="list-group-item list-group-item-action"
+                            data-video="test2.mp4"
+                            data-title="Match 2">
+                        Video 2
+                    </button>
+
+                    <button type="button"
+                            class="list-group-item list-group-item-action"
+                            data-video="test3.mp4"
+                            data-title="Match 3">
+                        Video 3
+                    </button>
+
+                </div>
+            </div>
+
+            <!-- Bounding Box Results -->
+            <div class="card shadow-sm mt-3">
+
+                <div class="card-header d-flex
+                            justify-content-between
+                            align-items-center">
+
+                    <span class="fw-semibold">
+                        Bounding Box Positions
+                    </span>
+
+                    <span id="listDetectionCount"
+                          class="badge text-bg-primary">
+                        0
+                    </span>
+                </div>
+
+                <div class="card-body p-2">
+                    <div id="boundingBoxList">
+
+                        <p class="text-muted small mb-0 p-2">
+                            No detections yet.
+                        </p>
+
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</main>
+
+<script>
+    const player = document.getElementById("footballVideo");
+    const overlay = document.getElementById("overlay");
+    const ctx = overlay.getContext("2d");
+
+    const videoButtons =
+        document.querySelectorAll("[data-video]");
+
+    const videoTitle =
+        document.getElementById("videoTitle");
+
+    const detectionCount =
+        document.getElementById("detectionCount");
+
+    const listDetectionCount =
+        document.getElementById("listDetectionCount");
+
+    const boundingBoxList =
+        document.getElementById("boundingBoxList");
+
+    const statusBox =
+        document.getElementById("inferenceStatus");
+
+    let selectedVideo = null;
+    let generation = 0;
+    let activeController = null;
+    let lastRequestTime = 0;
+
+    const DETECTION_INTERVAL_MS = 500;
+
+    const colors = {
+        player: "#22c55e",
+        referee: "#eab308",
+        goalkeeper: "#ef4444"
+    };
+
+    function setStatus(message, isError = false) {
+        statusBox.textContent = message;
+
+        statusBox.className = isError
+            ? "small text-danger mt-2"
+            : "small text-secondary mt-2";
+    }
+
+    function updateDetectionCount(count) {
+        detectionCount.textContent =
+            `${count} Detections`;
+
+        listDetectionCount.textContent = count;
+    }
+
+    function clearDetections() {
+        ctx.clearRect(
+            0, 0, overlay.width, overlay.height
+        );
+
+        updateDetectionCount(0);
+
+        boundingBoxList.replaceChildren();
+
+        const message = document.createElement("p");
+
+        message.className =
+            "text-muted small mb-0 p-2";
+
+        message.textContent = "No detections yet.";
+
+        boundingBoxList.appendChild(message);
+    }
+
+    function resizeOverlay() {
+        if (!player.videoWidth ||
+            !player.videoHeight) {
+            return;
+        }
+
+        overlay.width = player.videoWidth;
+        overlay.height = player.videoHeight;
+    }
+
+    function selectVideo(filename, title, button) {
+
+        // Cancel pending inference from previous video
+        generation++;
+        selectedVideo = null;
+
+        if (activeController) {
+            activeController.abort();
+            activeController = null;
+        }
+
+        player.pause();
+
+        player.src =
+            `/api/videos/${encodeURIComponent(filename)}/stream`;
+
+        player.load();
+
+        selectedVideo = filename;
+        lastRequestTime = 0;
+
+        clearDetections();
+
+        videoTitle.textContent = title;
+
+        videoButtons.forEach(btn => {
+            btn.classList.remove("active");
+        });
+
+        if (button) {
+            button.classList.add("active");
+        }
+
+        setStatus(`Selected ${title}. Press play to analyse.`);
+    }
+
+    function drawDetections(detections) {
+
+        if (!player.videoWidth) return;
+
+        if (overlay.width !== player.videoWidth ||
+            overlay.height !== player.videoHeight) {
+
+            resizeOverlay();
+        }
+
+        ctx.clearRect(
+            0, 0, overlay.width, overlay.height
+        );
+
+        ctx.lineWidth = 3;
+        ctx.font = "18px Arial";
+
+        for (const d of detections) {
+
+            const color =
+                colors[d.label] || "#ffffff";
+
+            const width = d.x2 - d.x1;
+            const height = d.y2 - d.y1;
+
+            ctx.strokeStyle = color;
+
+            ctx.strokeRect(
+                d.x1, d.y1,
+                width, height
+            );
+
+            const label =
+                `${d.label} ${(d.confidence * 100).toFixed(0)}%`;
+
+            const textY = Math.max(20, d.y1 - 5);
+
+            ctx.fillStyle = color;
+
+            ctx.fillText(
+                label, d.x1, textY
+            );
+        }
+
+        updateDetectionCount(detections.length);
+    }
+
+    function displayBoundingBoxes(detections) {
+
+        boundingBoxList.replaceChildren();
+
+        if (detections.length === 0) {
+            const message = document.createElement("p");
+
+            message.className =
+                "text-muted small mb-0 p-2";
+
+            message.textContent =
+                "No objects detected in this frame.";
+
+            boundingBoxList.appendChild(message);
+
+            return;
+        }
+
+        detections.forEach((d, index) => {
+
+            const item = document.createElement("div");
+
+            item.className =
+                "detection-item border rounded p-2 mb-2";
+
+            item.style.borderLeftColor =
+                colors[d.label] || "#6c757d";
+
+            const heading = document.createElement("div");
+
+            heading.className =
+                "d-flex justify-content-between mb-2";
+
+            const title = document.createElement("strong");
+            title.textContent =
+                `${index + 1}. ${d.label}`;
+
+            const confidence = document.createElement("span");
+            confidence.className =
+                "badge text-bg-secondary";
+
+            confidence.textContent =
+                `${(d.confidence * 100).toFixed(1)}%`;
+
+            heading.append(title, confidence);
+
+            const coordinates = document.createElement("div");
+            coordinates.className = "row g-2 small";
+
+            const values = [
+                ["X1", d.x1],
+                ["Y1", d.y1],
+                ["X2", d.x2],
+                ["Y2", d.y2],
+                ["Width", d.x2 - d.x1],
+                ["Height", d.y2 - d.y1]
+            ];
+
+            values.forEach(([name, value]) => {
+
+                const column = document.createElement("div");
+                column.className = "col-6";
+
+                const box = document.createElement("div");
+                box.className =
+                    "bg-light border rounded p-2";
+
+                const label = document.createElement("span");
+                label.className = "text-muted";
+                label.textContent = `${name}: `;
+
+                const number = document.createElement("strong");
+                number.textContent =
+                    Number(value).toFixed(1);
+
+                box.append(label, number);
+                column.appendChild(box);
+                coordinates.appendChild(column);
+            });
+
+            item.append(heading, coordinates);
+            boundingBoxList.appendChild(item);
+        });
+    }
+
+    async function detectFrame() {
+
+        if (activeController ||
+            !selectedVideo ||
+            !player.videoWidth) {
+            return;
+        }
+
+        const controller = new AbortController();
+        activeController = controller;
+
+        const videoAtRequest = selectedVideo;
+        const requestGeneration = generation;
+        const timestamp = player.currentTime;
+
+        try {
+
+            const url =
+                `/api/videos/${encodeURIComponent(videoAtRequest)}/detect` +
+                `?time=${encodeURIComponent(timestamp)}`;
+
+            setStatus(
+                `Running YOLO inference at ${timestamp.toFixed(2)}s...`
+            );
+
+            const response = await fetch(url, {
+                signal: controller.signal
+            });
+
+            if (!response.ok) {
+                throw new Error(
+                    `Inference HTTP ${response.status}`
+                );
+            }
+
+            const detections = await response.json();
+
+            // Ignore responses from old video selections
+            if (controller.signal.aborted ||
+                generation !== requestGeneration ||
+                selectedVideo !== videoAtRequest) {
+                return;
+            }
+
+            // Do not draw significantly outdated boxes
+            // over a moving video.
+            if (!player.paused &&
+                Math.abs(player.currentTime - timestamp) > 1.5) {
+                setStatus(
+                    "Inference is slower than playback. " +
+                    "Pause the video to inspect detections."
+                );
+                return;
+            }
+
+            drawDetections(detections);
+
+            // Update right-hand panel
+            displayBoundingBoxes(detections);
+
+            setStatus(
+                `${detections.length} detections at ` +
+                `${timestamp.toFixed(2)}s`
+            );
+
+            console.log(
+                "YOLO detections:",
+                timestamp,
+                detections
+            );
+
+        } catch (error) {
+
+            if (error.name !== "AbortError" &&
+                generation === requestGeneration) {
+
+                console.error("Detection failed:", error);
+
+                setStatus(error.message, true);
+            }
+
+        } finally {
+
+            if (activeController === controller) {
+                activeController = null;
+            }
+        }
+    }
+
+    // Resize canvas when a new video is loaded
+    player.addEventListener("loadedmetadata", () => {
+        resizeOverlay();
+    });
+
+    // Request detections during playback
+    player.addEventListener("timeupdate", () => {
+
+        if (player.paused || !selectedVideo) return;
+
+        const now = performance.now();
+
+        if (now - lastRequestTime >=
+            DETECTION_INTERVAL_MS) {
+
+            lastRequestTime = now;
+            detectFrame();
+        }
+    });
+
+    // Refresh detection after seeking
+    player.addEventListener("seeked", () => {
+        if (!selectedVideo) return;
+
+        if (activeController) {
+            activeController.abort();
+            activeController = null;
+        }
+
+        clearDetections();
+        detectFrame();
+    });
+
+    // Detect when playback is paused
+    player.addEventListener("pause", () => {
+        if (selectedVideo && !player.ended) {
+            detectFrame();
+        }
+    });
+
+    player.addEventListener("error", () => {
+        if (selectedVideo) {
+            setStatus(
+                "Unable to load selected video. Check the server.",
+                true
+            );
+        }
+    });
+
+    player.addEventListener("ended", () => {
+        setStatus("Video playback completed.");
+    });
+
+    // Video selection
+    videoButtons.forEach(button => {
+
+        button.addEventListener("click", () => {
+
+            selectVideo(
+                button.dataset.video,
+                button.dataset.title,
+                button
+            );
+        });
+    });
+
+    // Load first available video
+    if (videoButtons.length > 0) {
+
+        const first = videoButtons[0];
+
+        selectVideo(first.dataset.video, first.dataset.title, first);
+    }
+</script>
+
+</body>
+</html>
